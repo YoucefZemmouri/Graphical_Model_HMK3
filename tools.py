@@ -75,7 +75,8 @@ def get_prob(log_alpha, log_beta, A, mus, Sigmas, U):
     for t in range(T - 1):
         for i in range(K):
             for j in range(K):
-                prob[t, i, j] = np.exp(log_alpha[t, i] + log_beta[t + 1, j] + np.log(A[j, i]) + np.log(Gaussian(U[t + 1], mus[j], Sigmas[j])) - likelihood_all[t])
+                prob[t, i, j] = np.exp(log_alpha[t, i] + log_beta[t + 1, j] + np.log(A[j, i]) + np.log(
+                    Gaussian(U[t + 1], mus[j], Sigmas[j])) - likelihood_all[t])
     return prob
 
 
@@ -119,11 +120,42 @@ def EM(U, U_test, A, Pi, mus, Sigmas, epsilon=0.0001):
 
         log_alpha = get_log_alpha(U, Pi, mus, Sigmas, A)
         log_beta = get_log_beta(U, Pi, mus, Sigmas, A)
-        log_likelihood = get_log_likelihood(log_alpha,log_beta)
+        log_likelihood = get_log_likelihood(log_alpha, log_beta)
         log_likelihood_train.append(log_likelihood)
 
         log_alpha_test = get_log_alpha(U_test, Pi, mus, Sigmas, A)
         log_beta_test = get_log_beta(U_test, Pi, mus, Sigmas, A)
-        log_likelihood_test.append(get_log_likelihood(log_alpha_test,log_beta_test))
+        log_likelihood_test.append(get_log_likelihood(log_alpha_test, log_beta_test))
 
     return Pi, A, mus, Sigmas, log_likelihood_train, log_likelihood_test
+
+
+def Viterbi(U, mus, Sigmas, A, Pi):
+    T = U.shape[0]
+    K = A.shape[0]
+
+    X = np.zeros(T, dtype=int)
+    Z = np.zeros(T, dtype=int)
+
+    T_1 = np.zeros((K, T))
+    T_2 = np.zeros((K, T))
+
+    for k in range(K):
+        T_1[k, 0] = np.log(Pi[k]) + np.log(Gaussian(U[0, :], mus[k], Sigmas[k]))
+        T_2[k, 0] = - np.inf
+
+    for t in range(1, T):
+        for k in range(K):
+            T_1[k, t] = np.max(T_1[:, t - 1] + np.log(A[:, k])) + np.log(Gaussian(U[t, :], mus[k], Sigmas[k]))
+            T_2[k, t] = np.argmax(T_1[:, t - 1] + np.log(A[:, k]))
+
+    Z[T - 1] = np.argmax(T_1[:, T - 1])
+    X[T - 1] = Z[T - 1]
+
+    for t in range(T - 2, -1, -1):
+        Z[t] = T_2[Z[t + 1], t + 1]
+        X[t] = Z[t]
+    return X
+
+
+

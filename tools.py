@@ -10,7 +10,7 @@ def Gaussian(x, mu, Sigma):
     return c * np.exp(-temp / 2)
 
 
-def log_alpha(U, pi, mus, Sigmas, A):
+def get_log_alpha(U, pi, mus, Sigmas, A):
     T = U.shape[0]
     K = len(pi)
     log_alpha = np.zeros((T, K))
@@ -27,67 +27,56 @@ def log_alpha(U, pi, mus, Sigmas, A):
     return log_alpha
 
 
-def log_beta(U, pi, mus, Sigmas, A):
+def get_log_beta(U, pi, mus, Sigmas, A):
     T = U.shape[0]
     K = len(pi)
     log_beta = np.zeros((T, K))
 
-    log_beta[T - 1, :] = 1
+    log_beta[T - 1, :] = 0
 
     for t in range(T - 2, -1, -1):
         for k in range(K):
             a = np.zeros(K)
             for i in range(K):
-                a[i] = np.log(Gaussian(U[t, :], mus[i], Sigmas[i])) + log_beta[t + 1, i] + np.log(A[i, k])
+                a[i] = np.log(Gaussian(U[t + 1, :], mus[i], Sigmas[i])) + log_beta[t + 1, i] + np.log(A[i, k])
             a_ = np.max(a)
-            log_beta[t, k] = a_ + log(np.sum(np.exp(a - a_)))
+            log_beta[t, k] = a_ + np.log(np.sum(np.exp(a - a_)))
     return log_beta
 
 
-def log_likelihood(log_alpha, log_beta):
-    temp1 = log_alpha + log_beta
-    max_1 = np.max(temp1, axis=1)
-    max_ = np.tile(max_1, (temp1.shape[1], 1)).transpose()
-    temp2 = np.log(np.sum(np.exp(temp1 - max_), axis=1)) + max_1
-    return temp2.mean()
+def get_log_likelihood(log_alpha, log_beta):
+    temp = (log_alpha + log_beta)[0, :]
+    return np.log(np.sum(np.exp(temp - np.max(temp)))) + np.max(temp)
 
-'''
-def log_likelihood_test(log_alpha, log_beta):
-    temp = (log_alpha + log_beta)[3,:]
-    max = np.max(temp)
-    return np.sum(np.exp(temp - max)) + max
-'''
 
-def smoothing(log_alpha, log_beta):
+def get_log_likelihood_all(log_alpha, log_beta):
+    temp = log_alpha + log_beta
+    max_ = np.tile(np.max(temp, axis=1), (temp.shape[1], 1)).transpose()
+    likelihood_all = np.log(np.sum(np.exp(temp - max_), axis=1)) + np.max(temp, axis=1)
+    return likelihood_all
+
+
+def apply_smoothing(log_alpha, log_beta):
     # Compute p(q_t|u_0,...,u_T)
-    temp1 = log_alpha + log_beta
-    max_1 = np.max(temp1, axis=1)
-    max_ = np.tile(max_1, (temp1.shape[1], 1)).transpose()
-    temp2 = np.log(np.sum(np.exp(temp1 - max_), axis=1)) + max_1
-    temp2 = np.tile(temp2, (temp1.shape[1], 1)).transpose()
-    return np.exp(temp1 - temp2)
+    num = log_alpha + log_beta
+    likelihood_all = get_log_likelihood_all(log_alpha, log_beta)
+    denum = np.tile(likelihood_all, (num.shape[1], 1)).transpose()
+    return np.exp(num - denum)
 
 
-def proba(log_alpha, log_beta, A, mus, Sigmas, U):
+def get_prob(log_alpha, log_beta, A, mus, Sigmas, U):
     # proba[t,i,j] = p[q_t = i, q_t+1 = j|u_0,...,u_T]
     T = U.shape[0]
     K = A.shape[0]
-    proba = np.zeros((T - 1, K, K))
+    prob = np.zeros((T - 1, K, K))
 
-    temp1 = (log_alpha + log_beta)[:T - 1, :]
-    max_1 = np.max(temp1, axis=1)
-    max_ = np.tile(max_1, (temp1.shape[1], 1)).transpose()
-    temp2 = np.log(np.sum(np.exp(temp1 - max_), axis=1)) + max_1
-    denom = np.tile(temp2, (temp1.shape[1], 1)).transpose()
+    likelihood_all = get_log_likelihood_all(log_alpha, log_beta)
 
-    for j in range(K):
-        table = np.zeros((T - 1, K))
-        for i in range(T - 1):
-            table[i] = np.log(Gaussian(U[i], mus[j], Sigmas[j]))
-        A_log = np.tile(np.log(A[j, :]), (T - 1, 1))
-        log_q_t1 = np.tile(log_beta[1:, j], (K, 1)).transpose()
-        proba[:, :, j] = np.exp(log_alpha[:T - 1, :] + log_q_t1 + A_log + table - denom)
-    return proba
+    for t in range(T - 1):
+        for i in range(K):
+            for j in range(K):
+                prob[t, i, j] = np.exp(log_alpha[t, i] + log_beta[t + 1, j] + np.log(A[j, i]) + np.log(Gaussian(U[t + 1], mus[j], Sigmas[j])) - likelihood_all[t])
+    return prob
 
 
 def EM(U, U_test, A, Pi, mus, Sigmas, epsilon=0.0001):
@@ -97,13 +86,20 @@ def EM(U, U_test, A, Pi, mus, Sigmas, epsilon=0.0001):
     log_likelihood_test = []
 
     log_likelihood_old = -np.inf
-    log_likelihood = 0
 
-    while np.abs(log_likelihood_old-log_likelihood) > epsilon:
-        logalpha = log_alpha(U, Pi, mus, Sigmas, A)
-        logbeta = log_beta(U, Pi, mus, Sigmas, A)
-        prob = proba(logalpha, logbeta, A, mus, Sigmas, U)
-        smooth = smoothing(logalpha, logbeta)
+    log_alpha = get_log_alpha(U, Pi, mus, Sigmas, A)
+    log_beta = get_log_beta(U, Pi, mus, Sigmas, A)
+
+    log_alpha_test = get_log_alpha(U_test, Pi, mus, Sigmas, A)
+    log_beta_test = get_log_beta(U_test, Pi, mus, Sigmas, A)
+
+    log_likelihood = get_log_likelihood(log_alpha, log_beta)
+    log_likelihood_train.append(log_likelihood)
+    log_likelihood_test.append(get_log_likelihood(log_alpha_test, log_beta_test))
+
+    while np.abs(log_likelihood_old - log_likelihood) > epsilon:
+        prob = get_prob(log_alpha, log_beta, A, mus, Sigmas, U)
+        smooth = apply_smoothing(log_alpha, log_beta)
 
         Pi = smooth[0, :]
         for i in range(K):
@@ -115,33 +111,19 @@ def EM(U, U_test, A, Pi, mus, Sigmas, epsilon=0.0001):
             d = U.shape[1]
             Sigma_temp = np.zeros((d, d))
             for t in range(T):
-                temp = U_centered[t].reshape((d,1))
+                temp = U_centered[t].reshape((d, 1))
                 Sigma_temp += smooth[t, i] * np.dot(temp, temp.transpose())
             Sigmas[i] = Sigma_temp / np.sum(smooth[:, i])
+
         log_likelihood_old = log_likelihood
 
-        logalpha = log_alpha(U, Pi, mus, Sigmas, A)
-        logbeta = log_beta(U, Pi, mus, Sigmas, A)
-
-        temp1 = logalpha + logbeta
-        max_1 = np.max(temp1, axis=1)
-        max_ = np.tile(max_1, (temp1.shape[1], 1)).transpose()
-        temp2 = np.log(np.sum(np.exp(temp1 - max_), axis=1)) + max_1
-        log_likelihood = temp2.mean()
-
-        log_alpha_test = log_alpha(U_test, Pi, mus, Sigmas, A)
-        log_beta_test = log_beta(U_test, Pi, mus, Sigmas, A)
-
-        #log_likelihood = log_likelihood(logalpha, logbeta)
-
+        log_alpha = get_log_alpha(U, Pi, mus, Sigmas, A)
+        log_beta = get_log_beta(U, Pi, mus, Sigmas, A)
+        log_likelihood = get_log_likelihood(log_alpha,log_beta)
         log_likelihood_train.append(log_likelihood)
 
-        temp1 = log_alpha_test + log_beta_test
-        max_1 = np.max(temp1, axis=1)
-        max_ = np.tile(max_1, (temp1.shape[1], 1)).transpose()
-        temp2 = np.log(np.sum(np.exp(temp1 - max_), axis=1)) + max_1
-        log_likelihood_tst = temp2.mean()
-        log_likelihood_test.append(log_likelihood_tst)
+        log_alpha_test = get_log_alpha(U_test, Pi, mus, Sigmas, A)
+        log_beta_test = get_log_beta(U_test, Pi, mus, Sigmas, A)
+        log_likelihood_test.append(get_log_likelihood(log_alpha_test,log_beta_test))
 
     return Pi, A, mus, Sigmas, log_likelihood_train, log_likelihood_test
-
